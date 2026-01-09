@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Price Tracker / Premium</title>
+    {% load static %}
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <!-- Live Market Scan Overlay -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <div id="scan-overlay">
+        <div class="scan-container">
+            <div class="scan-radar"></div>
+            <div class="scan-title">Market Intelligence Engine</div>
+            <div class="scan-log" id="scan-log">
+                <!-- Log entries injected by JS -->
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <header class="header">
+            <div class="logo-badge">PRICE TRACKER</div>
+            <h1 class="hero-title">Market intelligence,<br>simplified.</h1>
+            <p class="hero-subtitle">Instantly analyze pricing across major platforms with our advanced tracking engine.
+                Find the optimal entry point.</p>
+        </header>
+
+        <section class="search-wrapper">
+            <div class="search-inner">
+                <form id="search-form" method="POST" action="{% url 'search_product' %}"
+                    style="display: flex; width: 100%;">
+                    {% csrf_token %}
+                    <input type="text" name="query" class="search-input"
+                        placeholder="Search for a product (e.g. MacBook Air M3)..."
+                        value="{% if product %}{{ product.search_query }}{% endif %}" required autocomplete="off">
+                    <button type="submit" class="search-btn-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                        </svg>
+                    </button>
+                </form>
+            </div>
+        </section>
+
+        <main class="main-content">
+            {% if error %}
+            <div class="alert-box">
+                {{ error }}
+            </div>
+            {% endif %}
+
+            {% if warning %}
+            <div class="alert-box" style="border-color: rgba(234, 179, 8, 0.2); color: #fde047;">
+                {{ warning }}
+            </div>
+            {% endif %}
+
+            {% if product and has_results %}
+            <div class="results-container">
+                <div class="results-header-flex">
+                    <span class="results-label">Live Market Data</span>
+                    <span class="results-label">{{ total_found }} Sources Found</span>
+                </div>
+
+                <!-- Results List -->
+                <div class="results-list">
+                    {% for result in price_results %}
+                    <div class="product-card">
+                        <div class="card-content-flex" style="display: flex; gap: 1.5rem; align-items: center;">
+                            <!-- Product Image -->
+                            <div class="card-image"
+                                style="width: 80px; height: 80px; flex-shrink: 0; background: white; border-radius: 8px; padding: 5px; display: flex; align-items: center; justify-content: center;">
+                                {% if result.image_url %}
+                                <img src="{{ result.image_url }}" alt="{{ result.website }}"
+                                    style="max-width: 100%; max-height: 100%; object-fit: contain;">
+                                {% else %}
+                                <span style="font-size: 2rem;">🛍️</span>
+                                {% endif %}
+                            </div>
+
+                            <div class="card-details" style="flex: 1;">
+                                <div class="card-store">
+                                    <span class="store-name">{{ result.website }}</span>
+                                    {% if result.is_best %}
+                                    <span class="best-badge">Best Offer</span>
+                                    {% endif %}
+                                </div>
+
+                                <div class="card-price-action">
+                                    <span class="price-display {% if result.is_best %}highlight{% endif %}">
+                                        ₹{{ result.price|floatformat:2 }}
+                                    </span>
+                                    <a href="{{ result.url }}" target="_blank" rel="noopener noreferrer"
+                                        class="btn-arrow">
+                                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                                            stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                            stroke-linejoin="round">
+                                            <line x1="7" y1="17" x2="17" y2="7"></line>
+                                            <polyline points="7 7 17 7 17 17"></polyline>
+                                        </svg>
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                {% if best_result %}
+                <div class="best-offer-widget">
+                    <span class="offer-eyebrow">Recommendation</span>
+                    <div class="offer-price">₹{{ best_result.price|floatformat:0 }}</div>
+                    <div class="offer-store">{{ best_result.website }}</div>
+                    <a href="{{ best_result.url }}" target="_blank" rel="noopener noreferrer" class="btn-premium">
+                        Secure This Price
+                    </a>
+                </div>
+                {% endif %}
+            </div>
+            {% elif product and not has_results %}
+            <div style="text-align: center; color: var(--text-secondary); padding: 4rem;">
+                No pricing data available for "{{ product.name }}".
+            </div>
+            {% endif %}
+
+            <!-- Check Price History logic before adding this block, but user wants Alert UI -->
+            {% if product %}
+            <div class="best-offer-widget" style="margin-top: 2rem; padding: 2rem;">
+                <span class="offer-eyebrow" style="color: var(--glow-violet);">Market Watch</span>
+                <p style="color: var(--text-secondary); margin-bottom: 2rem;">Get notified when the price drops below
+                    your target.</p>
+
+                <form action="{% url 'create_alert' %}" method="POST"
+                    style="display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center;">
+                    {% csrf_token %}
+                    <input type="hidden" name="product_id" value="{{ product.id }}">
+                    <input type="email" name="email" placeholder="Your Email" required
+                        style="background: rgba(255,255,255,0.05); border: 1px solid var(--border-subtle); color: white; padding: 1rem; border-radius: 8px; flex: 1; min-width: 200px;">
+                    <input type="number" name="target_price" placeholder="Target Price (₹)" required
+                        value="{{ best_price|default:''|floatformat:0 }}"
+                        style="background: rgba(255,255,255,0.05); border: 1px solid var(--border-subtle); color: white; padding: 1rem; border-radius: 8px; width: 150px;">
+                    <button type="submit" class="btn-premium"
+                        style="padding: 1rem 2rem; background: var(--glow-violet); color: white;">
+                        Set Alert
+                    </button>
+                </form>
+            </div>
+            {% endif %}
+
+            {% if product and history_json and history_json != "{}" %}
+            <div class="results-container" style="margin-top: 4rem;">
+                <div class="results-header-flex">
+                    <span class="results-label">Price History</span>
+                </div>
+                <div class="product-card" style="display: block; height: 400px; padding: 1rem;">
+                    <canvas id="priceHistoryChart"></canvas>
+                </div>
+            </div>
+            {% endif %}
+        </main>
+
+        <footer class="footer">
+            <p>&copy; 2026 Price Tracker</p>
+        </footer>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const input = document.querySelector('.search-input');
+            if (input) input.focus();
+
+            // Live Scan Logic
+            const form = document.getElementById('search-form');
+            const overlay = document.getElementById('scan-overlay');
+            const logContainer = document.getElementById('scan-log');
+
+            if (form && overlay && logContainer) {
+                form.addEventListener('submit', (e) => {
+                    // Show visual feedback immediately
+                    overlay.classList.add('active');
+
+                    // Optional: Prevent default for a split second to ensure painting?
+                    // e.preventDefault();
+                    // setTimeout(() => form.submit(), 50);
+
+                    const logs = [
+                        { text: "Initializing Secure Handshake...", type: "process", delay: 100 },
+                        { text: "Connecting to Amazon.in [Node 1]...", type: "process", delay: 600 },
+                        { text: "Scanning Flipkart.com [Node 2]...", type: "process", delay: 1200 },
+                        { text: "Accessing Myntra Fashion API [Node 3]...", type: "process", delay: 1800 },
+                        { text: "Querying Ajio/Reliance [Node 4]...", type: "process", delay: 2400 },
+                        { text: "Checking Meesho Catalog [Node 5]...", type: "process", delay: 3000 },
+                        { text: "Decrypting Pricing Structures...", type: "process", delay: 3500 },
+                        { text: "Filtering Irrelevant Candidates...", type: "warn", delay: 4500 },
+                        { text: "Aggregating Market Data...", type: "success", delay: 5800 },
+                        { text: "Finalizing Intelligence Report...", type: "process", delay: 7000 }
+                    ];
+
+                    logs.forEach(log => {
+                        setTimeout(() => {
+                            const entry = document.createElement('div');
+                            entry.className = `log-entry ${log.type}`;
+                            entry.textContent = log.text;
+                            logContainer.appendChild(entry);
+                            logContainer.scrollTop = logContainer.scrollHeight;
+                        }, log.delay);
+                    });
+                });
+            }
+
+            // Price History Chart
+            const historyDataRef = '{{ history_json|safe }}';
+            // Need chart adapter for dates
+            if (historyDataRef && historyDataRef !== '{}') {
+                // Dynamically load chartjs adapter for date-fns
+                const scriptCheck = document.getElementById('chart-adapter');
+                if (!scriptCheck) {
+                    const adapterScript = document.createElement('script');
+                    adapterScript.id = 'chart-adapter';
+                    adapterScript.src = 'https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js';
+                    document.head.appendChild(adapterScript);
+
+                    adapterScript.onload = initChart;
+                } else {
+                    initChart();
+                }
+
+                function initChart() {
+                    try {
+                        const historyData = JSON.parse(historyDataRef);
+                        const ctx = document.getElementById('priceHistoryChart').getContext('2d');
+
+                        const datasets = [];
+                        const colors = {
+                            'Amazon': '#f59e0b', // Amber
+                            'Flipkart': '#3b82f6', // Blue
+                            'Myntra': '#ec4899',   // Pink
+                            'Ajio': '#14b8a6',     // Teal
+                            'Meesho': '#8b5cf6',   // Violet
+                            'Other': '#10b981'     // Green
+                        };
+
+                        Object.keys(historyData).forEach(site => {
+                            const color = colors[site] || colors['Other'];
+                            datasets.push({
+                                label: site,
+                                data: historyData[site],
+                                borderColor: color,
+                                backgroundColor: color + '20', // Transparent fill
+                                borderWidth: 2,
+                                tension: 0.4,
+                                pointRadius: 4,
+                                pointHoverRadius: 6
+                            });
+                        });
+
+                        new Chart(ctx, {
+                            type: 'line',
+                            data: { datasets: datasets },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                interaction: {
+                                    intersect: false,
+                                    mode: 'index',
+                                },
+                                plugins: {
+                                    legend: {
+                                        labels: { color: '#a1a1aa' }
+                                    },
+                                    tooltip: {
+                                        backgroundColor: 'rgba(10, 10, 10, 0.9)',
+                                        titleColor: '#fff',
+                                        bodyColor: '#a1a1aa',
+                                        borderColor: 'rgba(255,255,255,0.1)',
+                                        borderWidth: 1
+                                    }
+                                },
+                                scales: {
+                                    x: {
+                                        type: 'time',
+                                        time: {
+                                            unit: 'day',
+                                            displayFormats: { day: 'MMM d' }
+                                        },
+                                        grid: { display: false },
+                                        ticks: { color: '#52525b' }
+                                    },
+                                    y: {
+                                        grid: { color: 'rgba(255,255,255,0.05)' },
+                                        ticks: { color: '#52525b' }
+                                    }
+                                }
+                            }
+                        });
+                    } catch (e) {
+                        console.error("Error rendering chart:", e);
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+
+</html>
