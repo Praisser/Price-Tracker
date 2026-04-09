@@ -1,179 +1,141 @@
-from .base import BaseScraper
-from bs4 import BeautifulSoup
-import urllib.parse
 import re
+import urllib.parse
+
+from bs4 import BeautifulSoup
 
 from core.services.browser import fetch_rendered_html
 
+from .base import BaseScraper
+
 
 class FlipkartScraper(BaseScraper):
-    """Scraper for Flipkart.com"""
-    
+    """Scraper for Flipkart."""
+
+    website = 'Flipkart'
+
     def search(self, query):
-        """Search Flipkart for the product."""
-        try:
-            # Flipkart search URL
-            search_url = "https://www.flipkart.com/search"
-            params = {
-                'q': query
-            }
-            
-            # Try regular HTTP request first
-            response = self.get_page(search_url, params=params)
-            html = None
-            use_playwright = False
-            
-            if response:
-                # Check status code
-                if response.status_code in (429, 503, 502, 403):
-                    use_playwright = True
-                    print(f"Flipkart returned {response.status_code}, using Playwright fallback")
-                else:
-                    html = response.text
+        search_url = "https://www.flipkart.com/search"
+        params = {'q': query}
+        response = self.get_page(search_url, params=params)
+        html = response.text if response else ''
+        http_status = response.status_code if response else None
+
+        use_playwright = (
+            not html
+            or http_status in (403, 429, 503)
+            or self.looks_blocked(html, response.url if response else search_url)
+            or self.is_thin_html(html)
+        )
+
+        if use_playwright:
+            url = f"{search_url}?{urllib.parse.urlencode(params)}"
+            rendered = fetch_rendered_html(url)
+            if rendered and rendered.html:
+                html = rendered.html
+                http_status = rendered.status or http_status
+            elif http_status in (403, 429):
+                return self.build_attempt(
+                    website=self.website,
+                    state='blocked',
+                    diagnostic_message='Flipkart blocked the search request before results could be parsed.',
+                    http_status=http_status,
+                )
+            elif http_status == 503:
+                return self.build_attempt(
+                    website=self.website,
+                    state='unavailable',
+                    diagnostic_message='Flipkart search was temporarily unavailable.',
+                    http_status=http_status,
+                )
             else:
-                # Request failed - use Playwright
-                use_playwright = True
-                print("Flipkart request failed, using Playwright fallback")
+                return self.build_attempt(
+                    website=self.website,
+                    state='error',
+                    diagnostic_message='Flipkart could not be rendered for this query.',
+                    http_status=http_status,
+                )
 
-            # If blocked or no HTML, fall back to Playwright
-            if use_playwright or not html or len(html) < 1000:
-                print(f"Fetching Flipkart with Playwright for: {query}")
-                url = f"{search_url}?{urllib.parse.urlencode(params)}"
-                pw = fetch_rendered_html(url)
-                if pw and pw.html:
-                    html = pw.html
-                    print(f"Playwright fetched {len(html)} chars from Flipkart")
-                else:
-                    print("Playwright also failed for Flipkart")
-                    return None
-            
-            # Try html.parser if lxml fails
-            try:
-                soup = BeautifulSoup(html, 'html.parser')
-            except:
-                soup = BeautifulSoup(html, 'lxml')
-            
-            # Find all potential product cards
-            candidates = []
-            
-            # Strategy 1: Look for divs with data-id attribute (Standard Flipkart Grid/List)
-            products = soup.find_all('div', {'data-id': True})
-            
-            if not products:
-                # Strategy 2: Look for common product containers if data-id missing
-                # Try to find containers with links that look like products
-                links = soup.find_all('a', href=re.compile(r'/p/'))
-                seen_parents = set()
-                for link in links:
-                    parent = link.find_parent('div')
-                    if parent and parent not in seen_parents:
-                        products.append(parent)
-                        seen_parents.add(parent)
-            
-            # Iterate through top 40 candidates to find the best match (Ads can push real results down)
-            for product in products[:40]:
-                try:
-                    # Extract title
-                    title = None
-                    title_elem = product.find('div', class_=re.compile('_4rR01T|s1Q9rs|IRpwTa'))
-                    if title_elem:
-                        title = title_elem.get_text(strip=True)
-                    else:
-                        # Fallback title from image alt or link
-                        img = product.find('img', alt=True)
-                        if img:
-                            title = img['alt']
-                        else:
-                            # Try link text
-                            link = product.find('a', href=re.compile(r'/p/'))
-                            if link:
-                                title = link.get_text(strip=True)
-                    
-                    if not title:
-                        continue
-                        
-                    # Extract Price
-                    price = None
-                    price_elem = product.find('div', class_=re.compile('_30jeq3'))
-                    if price_elem:
-                        price = self.parse_price(price_elem.get_text(strip=True))
-                    
-                    if not price:
-                        # Fallback price regex
-                        price_match = re.search(r'₹\s*([\d,]+)', product.get_text())
-                        if price_match:
-                            price = self.parse_price(price_match.group(0))
-                            
-                    if not price:
-                        continue
-                        
-                    # Extract URL
-                    url = None
-                    link = product.find('a', href=re.compile(r'/p/'))
-                    if link:
-                        href = link.get('href', '')
-                        if href.startswith('/'):
-                            url = f"https://www.flipkart.com{href.split('?')[0]}"
-                        elif href.startswith('http'):
-                            url = href.split('?')[0]
-                            
-                    if not url:
-                        continue
-                        
-                    # Extract image
-                    image_url = None
-                    img = product.find('img', src=True)
-                    if img:
-                        image_url = img['src']
+        candidates = self.parse_candidates(html)
+        if not candidates:
+            if self.looks_blocked(html):
+                return self.build_attempt(
+                    website=self.website,
+                    state='blocked',
+                    diagnostic_message='Flipkart returned a blocked or bot-detection page.',
+                    http_status=http_status,
+                )
+            return self.build_attempt(
+                website=self.website,
+                state='not_found',
+                diagnostic_message='Flipkart returned no organic product candidates for this query.',
+                http_status=http_status,
+            )
 
-                    # Add to candidates
-                    candidates.append({
-                        'title': title,
-                        'price': price,
-                        'url': url,
-                        'website': 'Flipkart',
-                        'image_url': image_url
-                    })
-                    
-                except Exception as e:
-                    continue
+        return self.build_attempt(
+            website=self.website,
+            state='matched',
+            candidates=candidates,
+            diagnostic_message=f'Parsed {len(candidates)} Flipkart candidates.',
+            http_status=http_status,
+        )
 
-            # Filter candidates for relevance
-            if not candidates:
-                return None
-                
-            # Scoring:
-            # 1. Check if all query words are in title (High score)
-            # 2. Check if brand (first word) is in title
-            # 3. Exclude if "sponsored" text is found (though hard to detect in text only)
-            
-            query_parts = query.lower().split()
-            best_match = None
-            max_score = -1
-            
-            for item in candidates:
-                title_lower = item['title'].lower()
-                score = 0
-                
-                # Brand match (First word of query usually)
-                if len(query_parts) > 0 and query_parts[0] in title_lower:
-                    score += 50  # Massive boost for brand match
-                
-                # Word overlap score
-                for word in query_parts:
-                    if word in title_lower:
-                        score += 5
-                
-                # Penalty for very short titles (ads?) or very mismatching ones
-                if score > max_score:
-                    max_score = score
-                    best_match = item
-            
-            if best_match:
-                return best_match
-            
-            return candidates[0] if candidates else None
-        except Exception as e:
-            print(f"Flipkart scraper error: {e}")
-        
-        return None
+    def parse_candidates(self, html):
+        soup = BeautifulSoup(html or '', 'html.parser')
+        results = []
+        seen_urls = set()
+
+        product_blocks = soup.find_all('div', {'data-id': True})
+        if not product_blocks:
+            product_blocks = [link.find_parent('div') for link in soup.find_all('a', href=re.compile(r'/p/'))]
+
+        for rank, product in enumerate([block for block in product_blocks if block], start=1):
+            if rank > 40:
+                break
+
+            title_elem = product.find('div', class_=re.compile(r'_4rR01T|s1Q9rs|IRpwTa'))
+            title = self.clean_text(title_elem.get_text(" ", strip=True) if title_elem else '')
+            if not title:
+                image = product.find('img', alt=True)
+                title = self.clean_text(image.get('alt', '') if image else '')
+            if not title:
+                continue
+
+            price_elem = product.find('div', class_=re.compile(r'_30jeq3'))
+            price = self.parse_price(price_elem.get_text(strip=True)) if price_elem else None
+            if not price:
+                price_match = re.search(r'₹\s*([\d,]+)', product.get_text(" ", strip=True))
+                price = self.parse_price(price_match.group(0)) if price_match else None
+            if not price:
+                continue
+
+            link = product.find('a', href=re.compile(r'/p/'))
+            href = link.get('href', '') if link else ''
+            url = self._canonicalize_url(href)
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+
+            sponsored = bool(re.search(r'sponsored', product.get_text(" ", strip=True), re.I))
+            image = product.find('img', src=True)
+            candidate = self.build_candidate(
+                title=title,
+                price=price,
+                url=url,
+                image_url=image.get('src') if image else None,
+                rank=rank,
+                is_sponsored=sponsored,
+                raw_text=product.get_text(" ", strip=True),
+            )
+            if candidate:
+                results.append(candidate)
+
+        return results
+
+    def _canonicalize_url(self, href):
+        if not href:
+            return None
+        if href.startswith('/'):
+            href = f'https://www.flipkart.com{href}'
+        if not href.startswith('http'):
+            return None
+        return href.split('?', 1)[0]

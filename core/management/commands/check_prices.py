@@ -28,13 +28,18 @@ class Command(BaseCommand):
                     
                     try:
                         # Use the shared tracking service
-                        results = track_prices_for_product(product)
+                        tracking_result = track_prices_for_product(product)
+                        results = tracking_result['accepted_results']
+                        statuses = tracking_result['source_statuses']
                         
                         if results:
                             prices = [f"{r['website']}: {r['price']}" for r in results]
                             self.stdout.write(self.style.SUCCESS(f'  -> Updated: {", ".join(prices)}'))
                         else:
-                            self.stdout.write(self.style.WARNING(f'  -> No results found'))
+                            self.stdout.write(self.style.WARNING('  -> No confident prices accepted'))
+
+                        status_summary = ', '.join(f"{item['website']}: {item['state']}" for item in statuses)
+                        self.stdout.write(f'  -> Source states: {status_summary}')
                             
                     except Exception as e:
                         self.stdout.write(self.style.ERROR(f'  -> Error: {str(e)}'))

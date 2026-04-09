@@ -1,68 +1,107 @@
-from .base import BaseScraper
 import json
 import urllib.parse
+
+from bs4 import BeautifulSoup
+
 from core.services.browser import fetch_rendered_html
 
-class MeeshoScraper(BaseScraper):
-    """Scraper for Meesho."""
-    
-    def search(self, query):
-        # Meesho Search
-        encoded_query = urllib.parse.quote_plus(query)
-        url = f"https://www.meesho.com/search?q={encoded_query}"
-        
-        try:
-            # Try regular request first
-            response = self.get_page(url)
-            html = None
-            use_playwright = False
-            
-            if response:
-                if response.status_code == 403:
-                     use_playwright = True
-                     print("Meesho 403, using Playwright fallback")
-                else:
-                    html = response.text
-            else:
-                use_playwright = True
-            
-            if use_playwright or not html:
-                pw = fetch_rendered_html(url)
-                if pw and pw.html:
-                    html = pw.html
-                else:
-                    return None
+from .base import BaseScraper
 
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(html, 'html.parser')
-            
-            # Look for NEXT_DATA
-            script = soup.find('script', id='__NEXT_DATA__')
-            if script:
-                data = json.loads(script.string)
-                
-                try:
-                    # Generic traversal for Meesho's NEXT_DATA structure
-                    # Usually: props -> pageProps -> initialState -> catalogs -> catalogs[0] -> products[0]
-                    catalogs = data.get('props', {}).get('pageProps', {}).get('initialState', {}).get('catalogs', {}).get('catalogs', [])
-                    
-                    if catalogs:
-                        # Find first catalog with products
-                        for cat in catalogs:
-                            products = cat.get('products', [])
-                            if products:
-                                product = products[0]
-                                return {
-                                    'website': 'Meesho',
-                                    'price': product.get('price'),
-                                    'url': "https://www.meesho.com/s/p/" + product.get('slug', ''),
-                                    'title': product.get('name')
-                                }
-                except Exception as e:
-                    print(f"Meesho JSON parse error: {e}")
-            
-        except Exception as e:
-            print(f"Meesho scraping error: {e}")
-            return None
-            
-        return None
+
+class MeeshoScraper(BaseScraper):
+    """Best-effort scraper for Meesho public search pages."""
+
+    website = 'Meesho'
+
+    def search(self, query):
+        url = f"https://www.meesho.com/search?q={urllib.parse.quote_plus(query)}"
+        response = self.get_page(url)
+        html = response.text if response else ''
+        http_status = response.status_code if response else None
+
+        rendered = fetch_rendered_html(url) if (not html or http_status in (403, 429, 503) or self.looks_blocked(html, response.url if response else url)) else None
+        if rendered and rendered.html:
+            html = rendered.html
+            http_status = rendered.status or http_status
+
+        if not html or http_status in (403, 429) or self.looks_blocked(html):
+            return self.build_attempt(
+                website=self.website,
+                state='unavailable',
+                diagnostic_message='Meesho did not expose a trustworthy public search page for this query.',
+                http_status=http_status,
+            )
+
+        candidates = self.parse_candidates(html)
+        if not candidates:
+            return self.build_attempt(
+                website=self.website,
+                state='not_found',
+                diagnostic_message='Meesho returned no public product candidates for this query.',
+                http_status=http_status,
+            )
+
+        return self.build_attempt(
+            website=self.website,
+            state='matched',
+            candidates=candidates,
+            diagnostic_message=f'Parsed {len(candidates)} Meesho candidates from public page data.',
+            http_status=http_status,
+        )
+
+    def parse_candidates(self, html):
+        soup = BeautifulSoup(html or '', 'html.parser')
+        script = soup.find('script', id='__NEXT_DATA__')
+        if not script or not script.string:
+            return []
+
+        try:
+            payload = json.loads(script.string)
+        except json.JSONDecodeError:
+            return []
+
+        products = []
+        self._collect_product_dicts(payload, products)
+        results = []
+        seen_urls = set()
+
+        for rank, product in enumerate(products, start=1):
+            if rank > 40:
+                break
+
+            slug = product.get('slug') or product.get('product_slug')
+            url = f'https://www.meesho.com/{slug}/p/{product.get("id") or product.get("catalog_id") or ""}'.rstrip('/')
+            if not slug or url in seen_urls:
+                continue
+            seen_urls.add(url)
+
+            price = (
+                product.get('price')
+                or product.get('discounted_price')
+                or product.get('sale_price')
+                or product.get('discountedPrice')
+            )
+            image_url = product.get('image') or product.get('image_url') or product.get('imageUrl')
+            candidate = self.build_candidate(
+                title=product.get('name') or product.get('title'),
+                price=price,
+                url=url,
+                image_url=image_url,
+                rank=rank,
+                raw_text=json.dumps(product, ensure_ascii=True),
+            )
+            if candidate:
+                results.append(candidate)
+
+        return results
+
+    def _collect_product_dicts(self, node, products):
+        if isinstance(node, dict):
+            keys = set(node.keys())
+            if {'name', 'slug'} <= keys and ({'price'} & keys or {'discounted_price', 'sale_price', 'discountedPrice'} & keys):
+                products.append(node)
+            for value in node.values():
+                self._collect_product_dicts(value, products)
+        elif isinstance(node, list):
+            for value in node:
+                self._collect_product_dicts(value, products)

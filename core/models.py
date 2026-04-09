@@ -19,9 +19,11 @@ class PriceResult(models.Model):
     """Model to store price results from different websites."""
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='price_results')
     website = models.CharField(max_length=100)
+    title = models.CharField(max_length=500, blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     url = models.URLField(max_length=500)
     image_url = models.URLField(max_length=500, null=True, blank=True)
+    match_confidence = models.FloatField(null=True, blank=True)
     scraped_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
@@ -56,3 +58,32 @@ class PriceAlert(models.Model):
     
     def __str__(self):
         return f"Alert for {self.email} on {self.product.name} (< ₹{self.target_price})"
+
+
+class SourceStatus(models.Model):
+    """Persist the last-known scrape outcome for each configured source."""
+
+    class State(models.TextChoices):
+        MATCHED = 'matched', 'Matched'
+        AMBIGUOUS = 'ambiguous', 'Ambiguous'
+        BLOCKED = 'blocked', 'Blocked'
+        NOT_FOUND = 'not_found', 'Not Found'
+        UNAVAILABLE = 'unavailable', 'Unavailable'
+        ERROR = 'error', 'Error'
+
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='source_statuses')
+    website = models.CharField(max_length=100)
+    state = models.CharField(max_length=20, choices=State.choices)
+    checked_at = models.DateTimeField(default=timezone.now)
+    diagnostic_message = models.TextField(blank=True)
+    matched_title = models.CharField(max_length=500, blank=True)
+    match_confidence = models.FloatField(null=True, blank=True)
+    http_status = models.PositiveIntegerField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['product', 'website']
+        verbose_name_plural = "Source statuses"
+        unique_together = ('product', 'website')
+
+    def __str__(self):
+        return f"{self.product.name} - {self.website} - {self.get_state_display()}"

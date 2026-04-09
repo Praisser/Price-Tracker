@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Price Editor / {{ product.name }}</title>
+    {% load static %}
+    <link rel="stylesheet" href="{% static 'css/style.css' %}?v=20260409-editor-3">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+</head>
+
+<body class="price-editor-page">
+    <div class="container">
+        <header class="header editor-header">
+            <div class="logo-badge">PRICE EDITOR</div>
+            <h1 class="hero-title editor-hero-title">{{ product.name }}</h1>
+            <p class="hero-subtitle editor-hero-copy">Edit a saved source price, write a history point, and run the
+                real alert-email path in one step.</p>
+            <div class="editor-header-actions">
+                <a href="/?product_id={{ product.id }}" class="btn-secondary">Back to Results</a>
+                <a href="/?product_id={{ product.id }}#market-watch" class="btn-editor-primary btn-editor-ghost">View Alerts</a>
+            </div>
+        </header>
+
+        <main class="main-content editor-main">
+            {% if messages %}
+            {% for message in messages %}
+            <div class="alert-box editor-message {% if message.tags == 'success' %}alert-box-success{% endif %}{% if message.tags == 'error' %}alert-box-error{% endif %}">
+                {{ message }}
+            </div>
+            {% endfor %}
+            {% endif %}
+
+            <section class="editor-overview-grid">
+                <div class="editor-panel editor-panel-primary">
+                    <div class="editor-panel-label">Product Snapshot</div>
+                    <div class="editor-panel-title">Manual testing console</div>
+                    <p class="editor-panel-copy">An alert should fire when a saved source price is equal to or below the
+                        target you set for this product. Only confidently matched sources appear here for manual
+                        editing.</p>
+                    <div class="editor-stats-grid">
+                        <div class="editor-stat-card">
+                            <span class="editor-stat-label">Saved Sources</span>
+                            <span class="editor-stat-value">{{ price_results|length }}</span>
+                        </div>
+                        <div class="editor-stat-card">
+                            <span class="editor-stat-label">Active Alerts</span>
+                            <span class="editor-stat-value">{{ active_alerts|length }}</span>
+                        </div>
+                        <div class="editor-stat-card">
+                            <span class="editor-stat-label">Lowest Saved Price</span>
+                            <span class="editor-stat-value">
+                                {% if best_result %}₹{{ best_result.price|floatformat:2 }}{% else %}N/A{% endif %}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="editor-panel">
+                    <div class="editor-panel-label">Testing Guide</div>
+                    <div class="editor-panel-title">Fastest way to verify email delivery</div>
+                    <p class="editor-panel-copy">1. Create an alert. 2. Set any saved price to the target or lower. 3.
+                        Save here and check the message banner for SMTP success or failure details.</p>
+                    <div class="editor-rule-list">
+                        <div class="editor-rule-chip">Condition: `price <= target`</div>
+                        <div class="editor-rule-chip">Each save writes history</div>
+                        <div class="editor-rule-chip">Triggered alerts auto-deactivate</div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="editor-section">
+                <div class="editor-section-header">
+                    <div>
+                        <div class="editor-section-kicker">Armed Alerts</div>
+                        <h2 class="editor-section-title">Who gets emailed right now</h2>
+                    </div>
+                    <div class="editor-section-meta">{{ active_alerts|length }} active</div>
+                </div>
+
+                {% if active_alerts %}
+                <div class="editor-stack">
+                    {% for alert in active_alerts %}
+                    <div class="editor-list-card">
+                        <div class="editor-list-main">
+                            <div class="editor-list-title">{{ alert.email }}</div>
+                            <div class="editor-list-copy">The alert fires when any saved source reaches
+                                ₹{{ alert.target_price|floatformat:2 }} or lower.</div>
+                        </div>
+                        <div class="status-pill">Active</div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="editor-empty-state">No active alerts yet. Create one on the results page first so this
+                    editor has something to trigger.</div>
+                {% endif %}
+            </section>
+
+            <section class="editor-section">
+                <div class="editor-section-header">
+                    <div>
+                        <div class="editor-section-kicker">Source Prices</div>
+                        <h2 class="editor-section-title">Edit and retest a source instantly</h2>
+                    </div>
+                    <div class="editor-section-meta">Each save reruns alert checks</div>
+                </div>
+
+                {% if price_results %}
+                <div class="editor-source-grid">
+                    {% for result in price_results %}
+                    <article class="editor-source-card">
+                        <div class="editor-source-head">
+                            <div>
+                                <div class="editor-source-name">{{ result.website }}</div>
+                                <a href="{{ result.url }}" target="_blank" rel="noopener noreferrer"
+                                    class="editor-link">Open source listing</a>
+                            </div>
+                            {% if best_result and result.id == best_result.id %}
+                            <span class="best-badge">Lowest Saved Price</span>
+                            {% endif %}
+                        </div>
+
+                        <div class="editor-price-band">
+                            <div>
+                                <div class="editor-price-label">Current Saved Price</div>
+                                <div class="editor-current-price">₹{{ result.price|floatformat:2 }}</div>
+                            </div>
+                            <div class="editor-last-updated">Updated {{ result.scraped_at|date:"M d, Y H:i" }} UTC</div>
+                        </div>
+
+                        <form method="POST" class="editor-form-grid">
+                            {% csrf_token %}
+                            <input type="hidden" name="result_id" value="{{ result.id }}">
+                            <label class="editor-field">
+                                <span class="editor-field-label">New price</span>
+                                <input type="number" name="price" min="0.01" step="0.01"
+                                    value="{{ result.price|floatformat:2 }}" class="input-dark" required>
+                            </label>
+                            <button type="submit" class="btn-editor-primary editor-submit">Save and check mail</button>
+                        </form>
+                    </article>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="editor-empty-state">No saved price rows found yet. Search the product first so the tracker
+                    can populate at least one source.</div>
+                {% endif %}
+            </section>
+        </main>
+
+        <footer class="footer">
+            <p>&copy; 2026 Price Tracker</p>
+        </footer>
+    </div>
+</body>
+
+</html>

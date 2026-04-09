@@ -1,158 +1,245 @@
-from django.utils import timezone
+import smtplib
+import statistics
+from decimal import Decimal
+
 from django.conf import settings
 from django.core.mail import send_mail
-from core.models import PriceResult, PriceHistory, PriceAlert
-from core.services.scraper.amazon import AmazonScraper
-from core.services.scraper.flipkart import FlipkartScraper
-from core.services.scraper.myntra import MyntraScraper
+from django.db import transaction
+from django.utils import timezone
+
+from core.constants import WEBSITE_ORDER
+from core.models import PriceAlert, PriceHistory, PriceResult, SourceStatus
+from core.services.matcher import MatchDecision, evaluate_scrape_candidates
 from core.services.scraper.ajio import AjioScraper
+from core.services.scraper.amazon import AmazonScraper
+from core.services.scraper.base import ScrapeAttempt
+from core.services.scraper.flipkart import FlipkartScraper
 from core.services.scraper.meesho import MeeshoScraper
-from core.services.normalizer import normalize_price_data
-from core.services.matcher import calculate_match_score
-import statistics
+from core.services.scraper.myntra import MyntraScraper
+
+
+SCRAPER_CLASSES = [
+    AmazonScraper,
+    FlipkartScraper,
+    MyntraScraper,
+    AjioScraper,
+    MeeshoScraper,
+]
+
+
+MIN_PRICE_MAP = {
+    'macbook': 40000,
+    'laptop': 15000,
+    'iphone': 30000,
+    'ipad': 20000,
+    'samsung galaxy s': 30000,
+}
+
+
+def _format_mail_error(error):
+    """Convert low-level SMTP exceptions into user-friendly text."""
+    if isinstance(error, smtplib.SMTPAuthenticationError):
+        return 'SMTP login failed. Check EMAIL_HOST_USER and use a valid Gmail App Password.'
+    return str(error)
+
+
+def _safe_decimal(value):
+    return Decimal(str(value)).quantize(Decimal('0.01'))
+
+
+def _minimum_safe_price(query):
+    query_lower = (query or '').lower()
+    for key, limit in MIN_PRICE_MAP.items():
+        if key in query_lower:
+            return limit
+    return 0
+
+
+def _ordered(items):
+    order_map = {website: index for index, website in enumerate(WEBSITE_ORDER)}
+    return sorted(items, key=lambda item: order_map.get(item['website'], 999))
+
+
+def _error_attempt(website, error):
+    return ScrapeAttempt(
+        website=website,
+        state='error',
+        diagnostic_message=str(error),
+        http_status=None,
+    )
+
+
+def _apply_price_sanity(source_records, *, min_safe_price):
+    matched_records = [
+        record for record in source_records
+        if record['state'] == SourceStatus.State.MATCHED and record['accepted_candidate']
+    ]
+
+    if not matched_records:
+        return source_records
+
+    prices = [record['accepted_candidate'].price for record in matched_records]
+    median_price = statistics.median(prices) if len(prices) >= 2 else None
+    price_floor = max(min_safe_price, median_price * 0.2) if median_price is not None else min_safe_price
+    price_ceiling = median_price * 5.0 if median_price is not None else None
+
+    for record in matched_records:
+        price = record['accepted_candidate'].price
+        if price < min_safe_price:
+            record['state'] = SourceStatus.State.AMBIGUOUS
+            record['diagnostic_message'] = (
+                f'Rejected as unsafe because the parsed price ₹{price:.2f} fell below the category floor of ₹{min_safe_price}.'
+            )
+            record['accepted_candidate'] = None
+            continue
+
+        if price_floor and price < price_floor:
+            record['state'] = SourceStatus.State.AMBIGUOUS
+            record['diagnostic_message'] = (
+                f'Rejected as a cross-source outlier because ₹{price:.2f} was far below the median live price.'
+            )
+            record['accepted_candidate'] = None
+            continue
+
+        if price_ceiling and price > price_ceiling:
+            record['state'] = SourceStatus.State.AMBIGUOUS
+            record['diagnostic_message'] = (
+                f'Rejected as a cross-source outlier because ₹{price:.2f} was far above the median live price.'
+            )
+            record['accepted_candidate'] = None
+
+    return source_records
+
+
+def _decision_from_attempt(query, attempt):
+    if attempt.state != 'matched' or not attempt.candidates:
+        return MatchDecision(
+            state=attempt.state,
+            diagnostic_message=attempt.diagnostic_message,
+            candidate_count=len(attempt.candidates),
+        )
+    return evaluate_scrape_candidates(query, attempt.candidates)
+
 
 def track_prices_for_product(product):
     """
-    Scrape prices, apply smart filtering, save results, and check alerts.
+    Evaluate all configured sources, persist their last-known states,
+    save only confident accepted prices, and trigger alerts for accepted matches.
     """
-    # Safety: Category-based minimum prices to avoid accessories
-    # Query keyword -> Minimum price (INR)
-    MIN_PRICE_MAP = {
-        'macbook': 40000,
-        'laptop': 15000,
-        'iphone': 30000,
-        'ipad': 20000,
-        'samsung galaxy s': 30000,
-    }
-    
-    query_lower = product.search_query.lower()
-    min_safe_price = 0
-    for key, limit in MIN_PRICE_MAP.items():
-        if key in query_lower:
-            min_safe_price = limit
-            break
-            
-    scrapers = [
-        AmazonScraper(),
-        FlipkartScraper(),
-        MyntraScraper(),
-        AjioScraper(),
-        MeeshoScraper(),
-    ]
-    
-    raw_results = []
-    
+    query = product.search_query
+    min_safe_price = _minimum_safe_price(query)
+    source_records = []
+
     print(f"\n=== Tracking prices for: {product.name} ===")
-    
-    # Phase 1: Gather Results
-    for scraper in scrapers:
-        scraper_name = scraper.__class__.__name__.replace('Scraper', '')
-        
+
+    for scraper_class in SCRAPER_CLASSES:
+        scraper = scraper_class()
+        website = getattr(scraper, 'website', scraper.__class__.__name__.replace('Scraper', ''))
+
         try:
-            data = scraper.search(product.search_query)
-            if data:
-                normalized = normalize_price_data(data)
-                if normalized:
-                    # Initial Score Check
-                    score = calculate_match_score(product.search_query, normalized['title'])
-                    normalized['match_score'] = score
-                    
-                    # 1. Hard reject for very low relevance
-                    if score < 0.2:
-                        print(f"[REJECT] {scraper_name} - Low text match ({score:.2f}): {normalized['title']}")
-                        continue
-                        
-                    # 2. Hard reject for Category Price Floor
-                    if normalized['price'] < min_safe_price:
-                         print(f"[REJECT] {scraper_name} - Price {normalized['price']} below safety limit {min_safe_price} for '{product.search_query}'")
-                         continue
-                        
-                    raw_results.append(normalized)
-                else:
-                    print(f"[X] {scraper_name} - Invalid data format")
-        except Exception as e:
-            print(f"[X] {scraper_name} - Error: {e}")
-            continue
-            
-    if not raw_results:
-        return []
+            attempt = scraper.search(query)
+        except Exception as error:
+            print(f"[X] {website} - Error: {error}")
+            attempt = _error_attempt(website, error)
 
-    # Phase 2: Price Anomaly Detection (if we have multiple results)
-    valid_results = []
-    
-    if len(raw_results) >= 2:
-        prices = [r['price'] for r in raw_results]
-        median_price = statistics.median(prices)
-        
-        # Define Safe Range
-        # floor: 20% of median (e.g. 200 for 1000) - catches accessories
-        # ceiling: 500% of median (e.g. 5000 for 1000) - catches packs/errors
-        price_floor = median_price * 0.2
-        price_ceiling = median_price * 5.0
-        
-        print(f"Stats: Median={median_price}, Floor={price_floor}, Ceiling={price_ceiling}")
-        
-        for res in raw_results:
-            # 1. Check Score Threshold (Standard)
-            if res['match_score'] < 0.4:
-                print(f"[SKIP] {res['website']} - Score {res['match_score']:.2f} too low")
-                continue
-                
-            # 2. Check Price Anomaly
-            if res['price'] < price_floor:
-                print(f"[SKIP] {res['website']} - Price anomaly detected (Too low: {res['price']}). Likely accessory.")
-                continue
-            
-            if res['price'] > price_ceiling:
-                print(f"[SKIP] {res['website']} - Price anomaly detected (Too high: {res['price']}).")
-                continue
-                
-            valid_results.append(res)
-    else:
-        # If only 1 result, we can't do comparative stats, just rely on matcher
-        # But be stricter on matcher
-        if raw_results:
-            res = raw_results[0]
-            if res['match_score'] >= 0.5:
-                 valid_results.append(res)
-            else:
-                print(f"[SKIP] {res['website']} - Single result but low score {res['match_score']:.2f}")
+        decision = _decision_from_attempt(query, attempt)
+        accepted_candidate = decision.accepted_candidate if decision.state == 'matched' else None
+        diagnostic_message = decision.diagnostic_message or attempt.diagnostic_message
 
-    # Phase 3: Save Valid Results
-    for result_data in valid_results:
-        # 1. Update/Create PriceResult
-        existing = PriceResult.objects.filter(
-            product=product,
-            website=result_data['website']
-        ).first()
-        
-        if not existing:
-            PriceResult.objects.create(
-                product=product,
-                website=result_data['website'],
-                price=result_data['price'],
-                url=result_data['url'],
-                image_url=result_data.get('image_url')
-            )
+        if decision.state == 'matched' and accepted_candidate:
+            print(f"[MATCH] {website} -> {accepted_candidate.title} @ ₹{accepted_candidate.price}")
         else:
-            existing.price = result_data['price']
-            existing.url = result_data['url']
-            existing.scraped_at = timezone.now()
-            if result_data.get('image_url'):
-                existing.image_url = result_data['image_url']
-            existing.save()
-        
-        # 2. Log History
-        PriceHistory.objects.create(
-            product=product,
-            website=result_data['website'],
-            price=result_data['price']
-        )
-        
-        # 3. Check Alerts
-        check_alerts(product, result_data['price'], result_data['url'])
-        
-    return valid_results
+            print(f"[{decision.state.upper()}] {website} - {diagnostic_message}")
+
+        source_records.append({
+            'website': website,
+            'state': decision.state,
+            'diagnostic_message': diagnostic_message,
+            'http_status': attempt.http_status,
+            'accepted_candidate': accepted_candidate,
+            'matched_title': decision.matched_title or (accepted_candidate.title if accepted_candidate else ''),
+            'match_confidence': decision.confidence,
+        })
+
+    source_records = _apply_price_sanity(source_records, min_safe_price=min_safe_price)
+
+    accepted_results = []
+    now = timezone.now()
+
+    with transaction.atomic():
+        for record in source_records:
+            website = record['website']
+            accepted_candidate = record['accepted_candidate']
+
+            SourceStatus.objects.update_or_create(
+                product=product,
+                website=website,
+                defaults={
+                    'state': record['state'],
+                    'checked_at': now,
+                    'diagnostic_message': record['diagnostic_message'],
+                    'matched_title': record['matched_title'],
+                    'match_confidence': record['match_confidence'],
+                    'http_status': record['http_status'],
+                },
+            )
+
+            if record['state'] == SourceStatus.State.MATCHED and accepted_candidate:
+                price_result, _created = PriceResult.objects.get_or_create(
+                    product=product,
+                    website=website,
+                    defaults={
+                        'title': accepted_candidate.title,
+                        'price': _safe_decimal(accepted_candidate.price),
+                        'url': accepted_candidate.url,
+                        'image_url': accepted_candidate.image_url,
+                        'match_confidence': record['match_confidence'],
+                        'scraped_at': now,
+                    },
+                )
+                price_result.title = accepted_candidate.title
+                price_result.price = _safe_decimal(accepted_candidate.price)
+                price_result.url = accepted_candidate.url
+                price_result.image_url = accepted_candidate.image_url
+                price_result.match_confidence = record['match_confidence']
+                price_result.scraped_at = now
+                price_result.save()
+
+                PriceHistory.objects.create(
+                    product=product,
+                    website=website,
+                    price=price_result.price,
+                )
+
+                accepted_results.append({
+                    'website': website,
+                    'title': accepted_candidate.title,
+                    'price': float(price_result.price),
+                    'url': accepted_candidate.url,
+                    'image_url': accepted_candidate.image_url,
+                    'match_confidence': record['match_confidence'],
+                })
+
+                check_alerts(product, price_result.price, accepted_candidate.url)
+            else:
+                PriceResult.objects.filter(product=product, website=website).delete()
+
+    source_statuses = [
+        {
+            'website': record['website'],
+            'state': record['state'],
+            'diagnostic_message': record['diagnostic_message'],
+            'matched_title': record['matched_title'],
+            'match_confidence': record['match_confidence'],
+            'http_status': record['http_status'],
+        }
+        for record in source_records
+    ]
+
+    return {
+        'accepted_results': _ordered(accepted_results),
+        'source_statuses': _ordered(source_statuses),
+    }
 
 
 def check_alerts(product, current_price, url):
@@ -161,20 +248,26 @@ def check_alerts(product, current_price, url):
     Sends email if threshold is met.
     """
     alerts = PriceAlert.objects.filter(product=product, is_active=True, target_price__gte=current_price)
-    
+    result = {
+        'matched': alerts.count(),
+        'sent': 0,
+        'failed': 0,
+        'errors': [],
+    }
+
     for alert in alerts:
         subject = f"Price Alert: {product.name} is now ₹{current_price}!"
         message = f"""
         Good news!
-        
+
         The price for "{product.name}" has dropped to ₹{current_price}, which is below your target of ₹{alert.target_price}.
-        
+
         Grab it here: {url}
-        
+
         Cheers,
         Price Tracker
         """
-        
+
         try:
             send_mail(
                 subject,
@@ -184,9 +277,16 @@ def check_alerts(product, current_price, url):
                 fail_silently=False,
             )
             print(f"Email sent to {alert.email}")
-            
-            # Deactivate alert after sending
+            result['sent'] += 1
+
             alert.is_active = False
             alert.save()
-        except Exception as e:
-            print(f"Failed to send email to {alert.email}: {e}")
+        except Exception as error:
+            print(f"Failed to send email to {alert.email}: {error}")
+            result['failed'] += 1
+            result['errors'].append({
+                'email': alert.email,
+                'message': _format_mail_error(error)
+            })
+
+    return result

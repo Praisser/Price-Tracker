@@ -5,4 +5,5 @@ urlpatterns = [
     path('', views.dashboard, name='dashboard'),
     path('search/', views.search_product, name='search_product'),
     path('alert/create/', views.create_alert, name='create_alert'),
+    path('product/<int:product_id>/price-editor/', views.price_editor, name='price_editor'),
 ]

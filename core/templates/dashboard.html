@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Price Tracker / Premium</title>
     {% load static %}
-    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+    <link rel="stylesheet" href="{% static 'css/style.css' %}?v=20260409-dashboard-3">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 </head>
 
@@ -51,6 +51,14 @@
         </section>
 
         <main class="main-content">
+            {% if messages %}
+            {% for message in messages %}
+            <div class="alert-box {% if message.tags == 'success' %}alert-box-success{% endif %}{% if message.tags == 'error' %}alert-box-error{% endif %}">
+                {{ message }}
+            </div>
+            {% endfor %}
+            {% endif %}
+
             {% if error %}
             <div class="alert-box">
                 {{ error }}
@@ -63,51 +71,105 @@
             </div>
             {% endif %}
 
-            {% if product and has_results %}
+            {% if product and has_source_entries %}
             <div class="results-container">
-                <div class="results-header-flex">
-                    <span class="results-label">Live Market Data</span>
-                    <span class="results-label">{{ total_found }} Sources Found</span>
+                <div class="results-toolbar-card">
+                    <div class="results-toolbar-copy">
+                        <div class="results-header-flex">
+                            <span class="results-label">Five-Source Live Scan</span>
+                            <span class="results-label">{{ total_found }} Matched / {{ total_expected }} Checked</span>
+                        </div>
+                        <h2 class="results-heading">{{ product.name }}</h2>
+                        <p class="results-subcopy">Every configured source is checked on each live run. We only show a
+                            price when the exact variant is confident; otherwise the source is surfaced honestly with
+                            its last-known status.</p>
+                    </div>
+                    <div class="results-toolbar-actions">
+                        {% if best_result %}
+                        <div class="results-summary-chip">
+                            <span class="results-summary-label">Best live price</span>
+                            <span class="results-summary-value">₹{{ best_result.price|floatformat:0 }}</span>
+                        </div>
+                        {% endif %}
+                        <div class="results-summary-chip">
+                            <span class="results-summary-label">Sources checked</span>
+                            <span class="results-summary-value">{{ total_checked }}</span>
+                        </div>
+                        {% if best_result %}
+                        <div class="results-summary-chip">
+                            <span class="results-summary-label">Best source</span>
+                            <span class="results-summary-value">{{ best_result.website }}</span>
+                        </div>
+                        {% endif %}
+                        <a href="{% url 'price_editor' product.id %}" class="btn-secondary btn-dashboard-editor">Open
+                            Price Editor</a>
+                    </div>
                 </div>
 
                 <!-- Results List -->
                 <div class="results-list">
-                    {% for result in price_results %}
-                    <div class="product-card">
-                        <div class="card-content-flex" style="display: flex; gap: 1.5rem; align-items: center;">
-                            <!-- Product Image -->
-                            <div class="card-image"
-                                style="width: 80px; height: 80px; flex-shrink: 0; background: white; border-radius: 8px; padding: 5px; display: flex; align-items: center; justify-content: center;">
-                                {% if result.image_url %}
-                                <img src="{{ result.image_url }}" alt="{{ result.website }}"
-                                    style="max-width: 100%; max-height: 100%; object-fit: contain;">
+                    {% for entry in source_entries %}
+                    <div class="product-card source-card {% if entry.is_best %}product-card-best{% endif %} {% if entry.state != 'matched' %}source-card-muted source-card-{{ entry.state }}{% endif %}">
+                        <div class="source-card-layout">
+                            <div class="source-card-visual">
+                                {% if entry.result and entry.image_url %}
+                                <img src="{{ entry.image_url }}" alt="{{ entry.website }}" class="source-card-image">
                                 {% else %}
-                                <span style="font-size: 2rem;">🛍️</span>
+                                <div class="source-card-fallback">{{ entry.website|slice:":1" }}</div>
                                 {% endif %}
                             </div>
 
-                            <div class="card-details" style="flex: 1;">
+                            <div class="source-card-copy">
                                 <div class="card-store">
-                                    <span class="store-name">{{ result.website }}</span>
-                                    {% if result.is_best %}
+                                    <span class="store-name">{{ entry.website }}</span>
+                                    {% if entry.is_best %}
                                     <span class="best-badge">Best Offer</span>
+                                    {% endif %}
+                                    <span class="status-pill status-pill-{{ entry.state }}">{{ entry.state_label }}</span>
+                                </div>
+
+                                <div class="source-card-title">
+                                    {% if entry.state == 'matched' and entry.result %}
+                                    {{ entry.result.title|default:product.name }}
+                                    {% elif entry.matched_title %}
+                                    {{ entry.matched_title }}
+                                    {% else %}
+                                    No confident listing accepted for this source
                                     {% endif %}
                                 </div>
 
-                                <div class="card-price-action">
-                                    <span class="price-display {% if result.is_best %}highlight{% endif %}">
-                                        ₹{{ result.price|floatformat:2 }}
-                                    </span>
-                                    <a href="{{ result.url }}" target="_blank" rel="noopener noreferrer"
-                                        class="btn-arrow">
-                                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
-                                            stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                                            stroke-linejoin="round">
-                                            <line x1="7" y1="17" x2="17" y2="7"></line>
-                                            <polyline points="7 7 17 7 17 17"></polyline>
-                                        </svg>
-                                    </a>
+                                <p class="source-card-copyline">{{ entry.diagnostic_message }}</p>
+
+                                <div class="source-card-meta">
+                                    {% if entry.match_confidence %}
+                                    <span class="source-meta-chip">Confidence {{ entry.match_confidence|floatformat:2 }}</span>
+                                    {% endif %}
+                                    {% if entry.http_status %}
+                                    <span class="source-meta-chip">HTTP {{ entry.http_status }}</span>
+                                    {% endif %}
+                                    {% if entry.state == 'matched' and entry.result %}
+                                    <span class="source-meta-chip">Exact variant accepted</span>
+                                    {% endif %}
                                 </div>
+                            </div>
+
+                            <div class="source-card-action">
+                                {% if entry.state == 'matched' and entry.result %}
+                                <span class="price-display {% if entry.is_best %}highlight{% endif %}">
+                                    ₹{{ entry.price|floatformat:2 }}
+                                </span>
+                                <a href="{{ entry.url }}" target="_blank" rel="noopener noreferrer"
+                                    class="btn-arrow">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                                        stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                        stroke-linejoin="round">
+                                        <line x1="7" y1="17" x2="17" y2="7"></line>
+                                        <polyline points="7 7 17 7 17 17"></polyline>
+                                    </svg>
+                                </a>
+                                {% else %}
+                                <div class="source-card-status-summary">{{ entry.state_label }}</div>
+                                {% endif %}
                             </div>
                         </div>
                     </div>
@@ -125,7 +187,7 @@
                 </div>
                 {% endif %}
             </div>
-            {% elif product and not has_results %}
+            {% elif product and not has_source_entries %}
             <div style="text-align: center; color: var(--text-secondary); padding: 4rem;">
                 No pricing data available for "{{ product.name }}".
             </div>
@@ -133,7 +195,7 @@
 
             <!-- Check Price History logic before adding this block, but user wants Alert UI -->
             {% if product %}
-            <div class="best-offer-widget" style="margin-top: 2rem; padding: 2rem;">
+            <div id="market-watch" class="best-offer-widget" style="margin-top: 2rem; padding: 2rem;">
                 <span class="offer-eyebrow" style="color: var(--glow-violet);">Market Watch</span>
                 <p style="color: var(--text-secondary); margin-bottom: 2rem;">Get notified when the price drops below
                     your target.</p>
