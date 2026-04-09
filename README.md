@@ -4,12 +4,12 @@ A premium, Django-based market analysis tool that aggregates and compares prices
 
 ## Features
 
-- 💎 **Premium Luxury UI** - Minimal, dark-themed interface inspired by Vercel and Linear (#0A0A0A).
-- 🧠 **Smart Relevance Engine** - Intelligently filters search results (scans top 40 items) to exclude ads and irrelevant competitor products.
-- 🔍 **Real-time Search** - Live pricing from Amazon and Flipkart.
-- ⚡ **Performance Caching** - Results are cached for 6 hours for instant subsequent loads.
-- 📱 **Responsive & Glassmorphism** - Modern, fluid design that works on all devices.
-- 🎯 **Best Deal Recommendation** - Automatically highlights the optimal purchase choice.
+-  **Premium UI** - Minimal, dark-themed interface inspired by Vercel and Linear (#0A0A0A).
+-  **Smart Relevance Engine** - Intelligently filters search results (scans top 40 items) to exclude ads and irrelevant competitor products.
+-  **Real-time Search** - Live pricing from Amazon and Flipkart.
+-  **Performance Caching** - Results are cached for 6 hours for instant subsequent loads.
+-  **Responsive & Glassmorphism** - Modern, fluid design that works on all devices.
+-  **Best Deal Recommendation** - Automatically highlights the optimal purchase choice.
 
 ## Supported Websites
 
