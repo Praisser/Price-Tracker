@@ -63,14 +63,23 @@ def _source_entries_for(product, best_result):
 
 
 def _warning_for(entries):
-    missing = [
-        f"{entry['website']} ({entry['state_label']})"
-        for entry in entries
-        if entry['state'] != SourceStatus.State.MATCHED
-    ]
-    if not missing:
+    hidden_count = sum(1 for entry in entries if entry['state'] != SourceStatus.State.MATCHED)
+    if not hidden_count:
         return None
-    return f'Checked all {len(WEBSITE_ORDER)} sources. No confident result from: {", ".join(missing)}.'
+    return (
+        f'Checked all {len(WEBSITE_ORDER)} sources. '
+        f'{hidden_count} source(s) did not return a confident exact match, so they are hidden from the result list.'
+    )
+
+
+def _status_counts(entries):
+    counts = {}
+    for entry in entries:
+        if entry['state'] == SourceStatus.State.MATCHED:
+            continue
+        label = entry['state_label']
+        counts[label] = counts.get(label, 0) + 1
+    return [{'label': label, 'count': count} for label, count in sorted(counts.items())]
 
 
 def dashboard(request):
@@ -93,6 +102,7 @@ def dashboard(request):
             source_entries = _source_entries_for(product, best_result)
             matched_entries = [entry for entry in source_entries if entry['state'] == SourceStatus.State.MATCHED and entry['result']]
             warning = _warning_for(source_entries)
+            status_counts = _status_counts(source_entries)
 
             history_qs = PriceHistory.objects.filter(product=product).order_by('timestamp')
             history_data = {}
@@ -109,6 +119,9 @@ def dashboard(request):
                 'product': product,
                 'price_results': sorted_results,
                 'source_entries': source_entries,
+                'visible_source_entries': matched_entries,
+                'status_counts': status_counts,
+                'hidden_status_count': sum(item['count'] for item in status_counts),
                 'best_result': best_result,
                 'best_price': best_price,
                 'has_results': len(matched_entries) > 0,
@@ -150,7 +163,11 @@ def search_product(request):
                     checked_at__gte=cache_time
                 ).values_list('website', flat=True)
             )
-            if len(recent_statuses) == len(WEBSITE_ORDER):
+            recent_prices = PriceResult.objects.filter(
+                product=product,
+                scraped_at__gte=cache_time
+            )
+            if len(recent_statuses) == len(WEBSITE_ORDER) and recent_prices.exists():
                 return redirect(f'/?product_id={product.id}')
 
         if not product:

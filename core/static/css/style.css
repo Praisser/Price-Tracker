@@ -430,6 +430,54 @@ body::after {
         rgba(255, 255, 255, 0.028);
 }
 
+.status-summary-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 1.1rem;
+    border-radius: 18px;
+    border: 1px solid rgba(245, 158, 11, 0.16);
+    background:
+        radial-gradient(circle at top left, rgba(245, 158, 11, 0.1), transparent 34%),
+        rgba(255, 255, 255, 0.03);
+}
+
+.status-summary-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: #f8fafc;
+    margin-bottom: 0.3rem;
+}
+
+.status-summary-copy {
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.status-summary-pills {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.55rem;
+    flex-wrap: wrap;
+}
+
+.source-empty-panel {
+    padding: 2rem;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 22px;
+    background: rgba(255, 255, 255, 0.025);
+    color: var(--text-secondary);
+    line-height: 1.7;
+}
+
+.source-empty-title {
+    color: var(--text-primary);
+    font-size: 1.15rem;
+    font-weight: 700;
+    margin-bottom: 0.55rem;
+}
+
 .source-card-ambiguous::before {
     background: linear-gradient(180deg, rgba(245, 158, 11, 0.9), rgba(251, 191, 36, 0.7));
 }
@@ -1097,6 +1145,15 @@ body::after {
     .source-card-action {
         width: 100%;
         justify-content: space-between;
+    }
+
+    .status-summary-card {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .status-summary-pills {
+        justify-content: flex-start;
     }
 
     .card-price-action {

@@ -90,13 +90,12 @@ class AmazonScraper(BaseScraper):
             if rank > 24:
                 break
 
-            title_elem = product.select_one('h2 span')
-            title = self.clean_text(title_elem.get_text(" ", strip=True) if title_elem else '')
+            title, title_url = self._extract_title_and_url(product)
             if not title:
                 continue
 
             link = product.find('a', href=re.compile(r'/dp/|/gp/'))
-            href = link.get('href', '') if link else ''
+            href = title_url or (link.get('href', '') if link else '')
             url = self._canonicalize_url(href)
             if not url:
                 continue
@@ -132,6 +131,28 @@ class AmazonScraper(BaseScraper):
                 results.append(candidate)
 
         return results
+
+    def _extract_title_and_url(self, product):
+        brand_elem = product.select_one('h2')
+        brand = self.clean_text(brand_elem.get_text(" ", strip=True) if brand_elem else '')
+        product_links = product.find_all('a', href=re.compile(r'/dp/|/gp/'))
+        text_links = [
+            (self.clean_text(link.get_text(" ", strip=True)), link.get('href', ''))
+            for link in product_links
+        ]
+        text_links = [(text, href) for text, href in text_links if text]
+
+        title = ''
+        href = ''
+        if text_links:
+            title, href = max(text_links, key=lambda item: len(item[0]))
+
+        if brand and title and brand.lower() not in title.lower():
+            title = f"{brand} {title}"
+        elif brand and not title:
+            title = brand
+
+        return title, href
 
     def _canonicalize_url(self, href):
         if not href:

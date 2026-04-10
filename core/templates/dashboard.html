@@ -81,8 +81,8 @@
                         </div>
                         <h2 class="results-heading">{{ product.name }}</h2>
                         <p class="results-subcopy">Every configured source is checked on each live run. We only show a
-                            price when the exact variant is confident; otherwise the source is surfaced honestly with
-                            its last-known status.</p>
+                            price when the exact variant is confident. Untrusted, ambiguous, unavailable, and not-found
+                            sources are summarized without exposing source names.</p>
                     </div>
                     <div class="results-toolbar-actions">
                         {% if best_result %}
@@ -108,8 +108,22 @@
 
                 <!-- Results List -->
                 <div class="results-list">
-                    {% for entry in source_entries %}
-                    <div class="product-card source-card {% if entry.is_best %}product-card-best{% endif %} {% if entry.state != 'matched' %}source-card-muted source-card-{{ entry.state }}{% endif %}">
+                    {% if hidden_status_count %}
+                    <div class="status-summary-card">
+                        <div>
+                            <div class="status-summary-title">{{ hidden_status_count }} source(s) hidden</div>
+                            <p class="status-summary-copy">Only confident exact matches are shown below.</p>
+                        </div>
+                        <div class="status-summary-pills">
+                            {% for item in status_counts %}
+                            <span class="source-meta-chip">{{ item.count }} {{ item.label }}</span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    {% for entry in visible_source_entries %}
+                    <div class="product-card source-card {% if entry.is_best %}product-card-best{% endif %}">
                         <div class="source-card-layout">
                             <div class="source-card-visual">
                                 {% if entry.result and entry.image_url %}
@@ -172,6 +186,12 @@
                                 {% endif %}
                             </div>
                         </div>
+                    </div>
+                    {% empty %}
+                    <div class="source-empty-panel">
+                        <div class="source-empty-title">No exact prices accepted yet</div>
+                        <p>We checked the configured sources, but none returned a confident exact product match for this
+                            search. Try adding the exact storage, model, or variant to the search query.</p>
                     </div>
                     {% endfor %}
                 </div>
@@ -255,11 +275,11 @@
 
                     const logs = [
                         { text: "Initializing Secure Handshake...", type: "process", delay: 100 },
-                        { text: "Connecting to Amazon.in [Node 1]...", type: "process", delay: 600 },
-                        { text: "Scanning Flipkart.com [Node 2]...", type: "process", delay: 1200 },
-                        { text: "Accessing Myntra Fashion API [Node 3]...", type: "process", delay: 1800 },
-                        { text: "Querying Ajio/Reliance [Node 4]...", type: "process", delay: 2400 },
-                        { text: "Checking Meesho Catalog [Node 5]...", type: "process", delay: 3000 },
+                        { text: "Checking Source Node 1...", type: "process", delay: 600 },
+                        { text: "Checking Source Node 2...", type: "process", delay: 1200 },
+                        { text: "Checking Source Node 3...", type: "process", delay: 1800 },
+                        { text: "Checking Source Node 4...", type: "process", delay: 2400 },
+                        { text: "Checking Source Node 5...", type: "process", delay: 3000 },
                         { text: "Decrypting Pricing Structures...", type: "process", delay: 3500 },
                         { text: "Filtering Irrelevant Candidates...", type: "warn", delay: 4500 },
                         { text: "Aggregating Market Data...", type: "success", delay: 5800 },
@@ -301,17 +321,10 @@
                         const ctx = document.getElementById('priceHistoryChart').getContext('2d');
 
                         const datasets = [];
-                        const colors = {
-                            'Amazon': '#f59e0b', // Amber
-                            'Flipkart': '#3b82f6', // Blue
-                            'Myntra': '#ec4899',   // Pink
-                            'Ajio': '#14b8a6',     // Teal
-                            'Meesho': '#8b5cf6',   // Violet
-                            'Other': '#10b981'     // Green
-                        };
+                        const sourcePalette = ['#f59e0b', '#3b82f6', '#ec4899', '#14b8a6', '#8b5cf6', '#10b981'];
 
-                        Object.keys(historyData).forEach(site => {
-                            const color = colors[site] || colors['Other'];
+                        Object.keys(historyData).forEach((site, index) => {
+                            const color = sourcePalette[index % sourcePalette.length];
                             datasets.push({
                                 label: site,
                                 data: historyData[site],
