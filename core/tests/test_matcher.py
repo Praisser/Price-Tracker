@@ -31,6 +31,21 @@ class MatcherTests(SimpleTestCase):
 
         self.assertEqual(decision.state, 'not_found')
 
+    def test_mobile_accessories_candidate_is_rejected(self):
+        decision = evaluate_scrape_candidates(
+            'iPhone 17 Pro Max',
+            [
+                Candidate(
+                    title='Luxury Kase iPhone 17 Pro Max Fashion Mobile Accessories',
+                    price=799,
+                    url='https://example.com/accessory',
+                    rank=1,
+                )
+            ],
+        )
+
+        self.assertEqual(decision.state, 'not_found')
+
     def test_wrong_storage_variant_becomes_ambiguous(self):
         decision = evaluate_scrape_candidates(
             'iPhone 17 256GB',

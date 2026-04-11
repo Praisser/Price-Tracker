@@ -6,6 +6,7 @@ from typing import Iterable, List, Optional, Sequence
 
 ACCESSORY_KEYWORDS = {
     'accessory',
+    'accessories',
     'adapter',
     'backcover',
     'bag',
@@ -17,6 +18,7 @@ ACCESSORY_KEYWORDS = {
     'glass',
     'guard',
     'keyboard',
+    'magsafe',
     'mount',
     'mouse',
     'pouch',
@@ -28,6 +30,9 @@ ACCESSORY_KEYWORDS = {
 }
 
 ACCESSORY_PHRASES = {
+    'back case',
+    'mag safe',
+    'mobile accessories',
     'screen protector',
     'tempered glass',
     'back cover',
