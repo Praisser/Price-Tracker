@@ -8,6 +8,7 @@ ACCESSORY_KEYWORDS = {
     'accessory',
     'accessories',
     'adapter',
+    'arm',
     'backcover',
     'bag',
     'bundle',
@@ -15,8 +16,11 @@ ACCESSORY_KEYWORDS = {
     'case',
     'charger',
     'cover',
+    'dock',
     'glass',
     'guard',
+    'holder',
+    'hub',
     'keyboard',
     'magsafe',
     'mount',
@@ -26,19 +30,40 @@ ACCESSORY_KEYWORDS = {
     'replacement',
     'skin',
     'sleeve',
+    'stand',
     'strap',
 }
 
 ACCESSORY_PHRASES = {
     'back case',
+    'charging dock',
+    'laptop stand',
     'mag safe',
     'mobile accessories',
+    'monitor arm',
     'screen protector',
     'tempered glass',
     'back cover',
     'phone case',
     'laptop sleeve',
     'replacement battery',
+}
+
+CATEGORY_ALIASES = {
+    'laptop': {'laptop', 'notebook', 'ultrabook', 'chromebook'},
+    'monitor': {'monitor', 'display'},
+    'phone': {'phone', 'smartphone', 'mobile phone', 'mobile', 'handset'},
+    'tablet': {'tablet', 'tab', 'ipad'},
+    'tv': {'tv', 'television', 'smart tv', 'google tv', 'android tv', 'oled tv', 'led tv'},
+    'headphones': {'headphone', 'headphones', 'earphone', 'earphones', 'earbud', 'earbuds', 'neckband'},
+    'watch': {'watch', 'smartwatch'},
+    'camera': {'camera', 'dslr', 'mirrorless'},
+    'refrigerator': {'refrigerator', 'fridge', 'freezer'},
+    'washing_machine': {'washing machine', 'washer', 'washer dryer'},
+    'air_conditioner': {'air conditioner', 'ac', 'split ac', 'window ac'},
+    'speaker': {'speaker', 'speakers', 'soundbar', 'home theatre', 'home theater'},
+    'microwave': {'microwave', 'microwave oven'},
+    'printer': {'printer', 'all in one printer', 'laser printer', 'inkjet printer'},
 }
 
 REFURBISHED_KEYWORDS = {
@@ -128,10 +153,12 @@ class QueryProfile:
     tokens: set[str]
     family_tokens: set[str]
     core_tokens: set[str]
+    required_text_tokens: set[str]
     major_variant_tokens: set[str]
     technical_variant_tokens: set[str]
     hard_variant_tokens: set[str]
     soft_variant_tokens: set[str]
+    categories: set[str]
     accessory_requested: bool
     refurbished_requested: bool
 
@@ -142,10 +169,12 @@ class CandidateProfile:
     normalized_title: str
     tokens: set[str]
     family_tokens: set[str]
+    required_text_tokens: set[str]
     major_variant_tokens: set[str]
     technical_variant_tokens: set[str]
     hard_variant_tokens: set[str]
     soft_variant_tokens: set[str]
+    categories: set[str]
     has_accessory_keywords: bool
     has_refurbished_keywords: bool
 
@@ -209,12 +238,31 @@ def _extract_soft_variants(tokens: Iterable[str]) -> set[str]:
     return {token for token in tokens if token in SOFT_VARIANT_KEYWORDS}
 
 
+def _extract_categories(normalized: str, tokens: Iterable[str]) -> tuple[set[str], set[str]]:
+    token_set = set(tokens)
+    categories = set()
+    category_tokens = set()
+
+    for category, aliases in CATEGORY_ALIASES.items():
+        for alias in aliases:
+            if ' ' in alias:
+                if alias in normalized:
+                    categories.add(category)
+                    category_tokens.update(alias.split())
+            elif alias in token_set:
+                categories.add(category)
+                category_tokens.add(alias)
+
+    return categories, category_tokens
+
+
 def _build_profile(text: str, *, raw_query: Optional[str] = None) -> QueryProfile | CandidateProfile:
     normalized = _normalize_text(text)
     tokens = _tokenize(text)
     technical_variant_tokens = _extract_technical_variants(text)
     major_variant_tokens = _extract_major_variants(tokens)
     soft_variant_tokens = _extract_soft_variants(tokens)
+    categories, category_tokens = _extract_categories(normalized, tokens)
     family_tokens = {
         token for token in tokens
         if token not in STOPWORDS
@@ -223,6 +271,7 @@ def _build_profile(text: str, *, raw_query: Optional[str] = None) -> QueryProfil
         and token not in SOFT_VARIANT_KEYWORDS
     }
     core_tokens = family_tokens - technical_variant_tokens
+    required_text_tokens = core_tokens - category_tokens
     hard_variant_tokens = technical_variant_tokens | major_variant_tokens
     accessory_requested = _contains_phrase(normalized, ACCESSORY_PHRASES) or bool(tokens & ACCESSORY_KEYWORDS)
     refurbished_requested = bool(tokens & REFURBISHED_KEYWORDS)
@@ -234,10 +283,12 @@ def _build_profile(text: str, *, raw_query: Optional[str] = None) -> QueryProfil
             tokens=tokens,
             family_tokens=family_tokens,
             core_tokens=core_tokens,
+            required_text_tokens=required_text_tokens,
             major_variant_tokens=major_variant_tokens,
             technical_variant_tokens=technical_variant_tokens,
             hard_variant_tokens=hard_variant_tokens,
             soft_variant_tokens=soft_variant_tokens,
+            categories=categories,
             accessory_requested=accessory_requested,
             refurbished_requested=refurbished_requested,
         )
@@ -247,10 +298,12 @@ def _build_profile(text: str, *, raw_query: Optional[str] = None) -> QueryProfil
         normalized_title=normalized,
         tokens=tokens,
         family_tokens=family_tokens,
+        required_text_tokens=required_text_tokens,
         major_variant_tokens=major_variant_tokens,
         technical_variant_tokens=technical_variant_tokens,
         hard_variant_tokens=hard_variant_tokens,
         soft_variant_tokens=soft_variant_tokens,
+        categories=categories,
         has_accessory_keywords=_contains_phrase(normalized, ACCESSORY_PHRASES) or bool(tokens & ACCESSORY_KEYWORDS),
         has_refurbished_keywords=bool(tokens & REFURBISHED_KEYWORDS),
     )
@@ -303,6 +356,55 @@ def _confidence_for(query: QueryProfile, candidate_title: str, *, exact: bool, i
     return round(max(0.0, min(0.99, base + (fuzzy * 0.08))), 3)
 
 
+def _canonicalize_token(token: str) -> str:
+    token = token.lower()
+    if token.endswith('ies') and len(token) > 4:
+        return token[:-3] + 'y'
+    if token.endswith('s') and len(token) > 3 and not token.endswith('ss'):
+        return token[:-1]
+    return token
+
+
+def _tokens_match(query_token: str, candidate_token: str) -> bool:
+    if query_token == candidate_token:
+        return True
+
+    canonical_query = _canonicalize_token(query_token)
+    canonical_candidate = _canonicalize_token(candidate_token)
+    if canonical_query == canonical_candidate:
+        return True
+
+    if len(canonical_query) < 5 or len(canonical_candidate) < 5:
+        return False
+
+    if abs(len(canonical_query) - len(canonical_candidate)) > 2:
+        return False
+
+    return difflib.SequenceMatcher(None, canonical_query, canonical_candidate).ratio() >= 0.84
+
+
+def _covers_query_core(query: QueryProfile, profile: CandidateProfile) -> bool:
+    for required_token in query.required_text_tokens:
+        if not any(_tokens_match(required_token, candidate_token) for candidate_token in profile.tokens):
+            return False
+
+    if query.categories and not query.categories.issubset(profile.categories):
+        return False
+
+    return True
+
+
+def _is_broad_query(query: QueryProfile) -> bool:
+    if query.hard_variant_tokens:
+        return False
+
+    if len(query.required_text_tokens) > 4:
+        return False
+
+    has_numeric_required_token = any(any(char.isdigit() for char in token) for token in query.required_text_tokens)
+    return not has_numeric_required_token
+
+
 def evaluate_candidate(query: QueryProfile, candidate) -> Optional[CandidateAssessment]:
     profile = build_candidate_profile(candidate.title)
 
@@ -312,7 +414,7 @@ def evaluate_candidate(query: QueryProfile, candidate) -> Optional[CandidateAsse
     if profile.has_refurbished_keywords and not query.refurbished_requested:
         return None
 
-    if not query.core_tokens.issubset(profile.tokens):
+    if not _covers_query_core(query, profile):
         return None
 
     missing_hard_tokens = query.hard_variant_tokens - profile.hard_variant_tokens
@@ -390,7 +492,7 @@ def evaluate_scrape_candidates(query: str, candidates: Sequence[object]) -> Matc
 
     if exact_matches:
         signatures = {item.signature for item in exact_matches}
-        if len(signatures) > 1:
+        if len(signatures) > 1 and not _is_broad_query(query_profile):
             best_family = choose_best_candidate(exact_matches)
             return MatchDecision(
                 state='ambiguous',
@@ -405,7 +507,11 @@ def evaluate_scrape_candidates(query: str, candidates: Sequence[object]) -> Matc
             state='matched',
             accepted_candidate=best.candidate,
             confidence=best.confidence,
-            diagnostic_message=best.reason,
+            diagnostic_message=(
+                'Relevant brand/category match selected for a broader search.'
+                if len(signatures) > 1
+                else best.reason
+            ),
             matched_title=best.candidate.title,
             candidate_count=len(candidates),
         )
